@@ -1,22 +1,111 @@
-version: '3.8'
 services:
-  api:
-    build: ./Server
-    ports:
-      - "3000:3000"
-    environment:
-      - DATABASE_URL=postgresql://devuser:devpass@db:5432/chess_rpg
-    depends_on:
-      - db
-
+  # PostgreSQL Database
   db:
-    image: postgres:15
+    image: postgres:16-alpine
+    container_name: chess-rpg-db
+    restart: unless-stopped
+    env_file:
+      - .env
     environment:
-      POSTGRES_DB: chess_rpg
-      POSTGRES_USER: devuser
-      POSTGRES_PASSWORD: devpass
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "${DB_PORT:-5432}:5432"
     volumes:
-      - db-data:/var/lib/postgresql/data
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    networks:
+      - chess-rpg-network
+
+  # Node.js API Server with Prisma
+  api:
+    build:
+      context: ./Server
+      dockerfile: dockerfile.server
+    container_name: chess-rpg-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      PORT: ${API_PORT:-3000}
+      DATABASE_URL: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}"
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${API_PORT:-3000}:3000"
+    volumes:
+      - ./Server:/app
+      - /app/node_modules
+      - /app/prisma/migrations
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/ping"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 40s
+    networks:
+      - chess-rpg-network
+
+  # pgAdmin - PostgreSQL Web Interface
+  pgadmin:
+    image: dpage/pgadmin4:8
+    container_name: chess-rpg-pgadmin
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD}
+      PGADMIN_CONFIG_ENHANCED_COOKIE_PROTECTION: "False"
+      PGADMIN_CONFIG_WTF_CSRF_TIME_LIMIT: "None"
+      PGADMIN_CONFIG_SECRET_KEY: "'SuperSecretKey123456789012345678901234567890'"
+    ports:
+      - "${PGADMIN_PORT:-5050}:80"
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - pgadmin-data:/var/lib/pgadmin
+      - ./servers.json:/pgadmin4/servers.json:ro
+    networks:
+      - chess-rpg-network
+
+  # Angular Web Client
+  web:
+    build:
+      context: ./Client
+      dockerfile: dockerfile.client
+    container_name: chess-rpg-web
+    restart: unless-stopped
+    environment:
+      CHOKIDAR_USEPOLLING: "1"
+      NODE_ENV: development
+    ports:
+      - "${WEB_PORT:-4200}:4200"
+    volumes:
+      - ./Client:/app
+      - /app/node_modules
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - chess-rpg-network
 
 volumes:
-  db-data:
+  pgdata:
+    name: chess-rpg-pgdata
+  pgadmin-data:
+    name: chess-rpg-pgadmin-data
+
+networks:
+  chess-rpg-network:
+    name: chess-rpg-network
+    driver: bridge

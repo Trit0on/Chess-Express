@@ -1,0 +1,22 @@
+version: '3.8'
+services:
+  api:
+    build: ./Server
+    ports:
+      - "3000:3000"
+    env_file:
+      - ./Server/.env
+    depends_on:
+      - db
+
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: chess_rpg
+      POSTGRES_USER: devuser
+      POSTGRES_PASSWORD: devpass
+    volumes:
+      - db-data:/var/lib/postgresql/data
+
+volumes:
+  db-data:

@@ -4,8 +4,8 @@ services:
     build: ./Server
     ports:
       - "3000:3000"
-    env_file:
-      - ./Server/.env
+    environment:
+      - DATABASE_URL=postgresql://devuser:devpass@db:5432/chess_rpg
     depends_on:
       - db
 

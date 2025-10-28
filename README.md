@@ -7,10 +7,12 @@
 - [Architecture](#architecture)
 - [Prérequis](#prérequis)
 - [Installation rapide](#installation-rapide)
+- [Workflow Git et Environnements](#workflow-git-et-environnements)
 - [Structure du projet](#structure-du-projet)
 - [Commandes utiles](#commandes-utiles)
 - [Développement](#développement)
 - [Base de données](#base-de-données)
+- [CI/CD](#cicd)
 - [Troubleshooting](#troubleshooting)
 - [Production](#production)
 
@@ -89,6 +91,48 @@ docker compose logs -f
 
 ---
 
+## Workflow Git et Environnements
+
+**Documentation complète : [WORKFLOW.md](WORKFLOW.md)**
+**Commandes Docker : [DOCKER-COMMANDS.md](DOCKER-COMMANDS.md)**
+
+### Quick Start
+
+#### Environnement DEV (développement avec hot-reload)
+```bash
+docker compose up -d
+# Frontend: http://localhost:4200
+# API: http://localhost:3000
+# pgAdmin: http://localhost:5050
+```
+
+#### Environnement PROD (test local production)
+```bash
+cp .env.production.example .env.production
+# Éditer .env.production avec vos credentials
+docker compose -f docker-compose.prod.yml up -d
+# Application: http://localhost (port 80)
+```
+
+#### Workflow Git
+```bash
+# Créer une branche feature
+git checkout develop
+git checkout -b feature/ma-fonctionnalite
+
+# Développer, commiter, pusher
+git add .
+git commit -m "feat: Ma nouvelle fonctionnalité"
+git push origin feature/ma-fonctionnalite
+
+# Créer une Pull Request sur GitHub
+# develop <- feature/ma-fonctionnalite
+```
+
+**Lisez [WORKFLOW.md](WORKFLOW.md) pour tous les détails**
+
+---
+
 ## Structure du projet
 
 ```
@@ -116,7 +160,7 @@ App/
 
 ---
 
-## 🛠️ Commandes utiles
+## Commandes utiles
 
 ### Docker Compose
 
@@ -292,6 +336,58 @@ SELECT COUNT(*) FROM "User";
    - Database: `appdb`
    - Username: `postgres`
    - Password: `postgres`
+
+---
+
+## CI/CD
+
+### GitHub Actions
+
+Le projet inclut un pipeline CI/CD automatique (`.github/workflows/ci-cd.yml`) :
+
+**IMPORTANT : Par défaut, le déploiement n'est PAS automatique**
+
+**Sur chaque push vers `develop` ou `main` :**
+1. Tests automatiques (API health, DB connection)
+2. Build des images Docker
+3. Déploiement automatique (UNIQUEMENT si configuré avec secrets GitHub)
+
+**Sur chaque Pull Request :**
+1. Validation du code
+2. Tests complets
+
+### Configurer le déploiement automatique
+
+Pour activer le déploiement automatique vers votre serveur :
+
+1. **Ajoutez des secrets GitHub** (Settings > Secrets and variables > Actions) :
+   - `DEPLOY_HOST` : Adresse IP de votre serveur
+   - `DEPLOY_USER` : Nom d'utilisateur SSH
+   - `DEPLOY_SSH_KEY` : Clé privée SSH
+
+2. **Modifiez `.github/workflows/ci-cd.yml`** :
+   ```yaml
+   # Dans le job "deploy", section "Deploy to PROD"
+   - name: Deploy to PROD
+     run: |
+       ssh ${{ secrets.DEPLOY_USER}}@${{ secrets.DEPLOY_HOST }} << 'EOF'
+         cd /path/to/Chess-RPG/App
+         git pull origin main
+         docker compose -f docker-compose.prod.yml down
+         docker compose -f docker-compose.prod.yml up -d --build
+       EOF
+   ```
+
+### Build des images
+
+Le workflow peut aussi publier vos images sur Docker Hub ou GitHub Container Registry :
+
+```yaml
+# Décommenter dans .github/workflows/ci-cd.yml
+docker login -u ${{ secrets.DOCKER_USERNAME }} -p ${{ secrets.DOCKER_PASSWORD }}
+docker compose -f docker-compose.prod.yml build
+docker compose -f docker-compose.prod.yml push
+```
 
 ---
 

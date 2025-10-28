@@ -1,0 +1,59 @@
+# Configuration pour la PRODUCTION
+# Usage: docker compose -f docker-compose.prod.yml up -d
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: chess-rpg-db-prod
+    restart: always
+    env_file: .env.production  # Fichier séparé pour la prod
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata-prod:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: ./Server
+      dockerfile: dockerfile.server
+      target: production
+    container_name: chess-rpg-api-prod
+    restart: always
+    env_file: .env.production
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}"
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    # ❌ PAS de volumes en prod (code dans l'image)
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/api/ping"]
+      interval: 30s
+      start_period: 40s
+
+  web:
+    build:
+      context: ./Client
+      dockerfile: dockerfile.client
+      target: production
+    container_name: chess-rpg-web-prod
+    restart: always
+    environment:
+      NODE_ENV: production
+    ports:
+      - "80:80"  # Port 80 en production
+    # ❌ PAS de volumes en prod
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  pgdata-prod:

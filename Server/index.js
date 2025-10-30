@@ -1,14 +1,30 @@
 const express = require('express');
 const cors = require('cors');
 const { PrismaClient } = require('@prisma/client');
+const cookieParser = require('cookie-parser');
 require('dotenv').config();
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+
 const prisma = new PrismaClient();
+const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
+app.use(cookieParser());
+
+// Custom header for tracing
+app.use((req, res, next) => {
+  res.setHeader('X-App', 'chess-api');
+  next();
+});
+
+// Auth routes
+const authRouter = require('./api/auth');
+app.use('/api/auth', authRouter);
+
+const usersRouter = require('./api/users');
+app.use('/api/users', usersRouter);
 
 // Simple health endpoint
 app.get('/api/ping', (req, res) => {
@@ -17,7 +33,7 @@ app.get('/api/ping', (req, res) => {
 
 // Example API route
 app.get('/api/hello', (req, res) => {
-  res.json({ ok: true, greeting: 'Hello from Chess RPG' });
+  res.json({ ok: true, greeting: 'Hello from Chess API' });
 });
 
 // Database test endpoint
@@ -39,6 +55,16 @@ app.get('/api/dbtest', async (req, res) => {
       databaseUrl: process.env.DATABASE_URL?.replace(/:[^:@]+@/, ':***@')
     });
   }
+});
+
+// 404 and error handlers
+app.use((req, res, next) => {
+  res.status(404).json({ ok: false, message: 'Not Found' });
+});
+
+app.use((err, req, res, next) => {
+  console.error(err);
+  res.status(err.status || 500).json({ ok: false, message: err.message || 'Server error' });
 });
 
 // Graceful shutdown

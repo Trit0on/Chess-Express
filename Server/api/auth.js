@@ -6,7 +6,6 @@ const jwt = require("jsonwebtoken"); //pour créer et vérifier les tokens JWT.
 const router = express.Router();
 const prisma = new PrismaClient();
 
-// Password hashing helpers (PBKDF2 + SHA-512)
 const ITERATIONS = 120000;
 const KEYLEN = 64;
 const DIGEST = "sha512";
@@ -18,32 +17,46 @@ function hashPassword(plain) {
     return `pbkdf2-${DIGEST}$${ITERATIONS}$${salt}$${derived}`;
 }
 function verifyPassword(plain, stored) {
-    const [iterStr, salt, hash] = stored.split("$");
-    const iterations = parseInt(iterStr, 10);
-    const derived = crypto
-        .pbkdf2Sync(plain, salt, iterations, KEYLEN, DIGEST)
-        .toString("hex");
-    return crypto.timingSafeEqual(
-        Buffer.from(hash, "hex"),
-        Buffer.from(derived, "hex")
-    );
+  const parts = stored.split('$');
+  const isNewFormat = parts.length === 4;
+
+  const iterations = parseInt(isNewFormat ? parts[1] : parts[0], 10);
+  const salt = isNewFormat ? parts[2] : parts[1];
+  const hash = isNewFormat ? parts[3] : parts[2];
+
+  if (!iterations || !salt || !hash) return false;
+
+  const derived = crypto.pbkdf2Sync(plain, salt, iterations, KEYLEN, DIGEST).toString('hex');
+
+  return crypto.timingSafeEqual(
+    Buffer.from(hash, 'hex'),
+    Buffer.from(derived, 'hex')
+  );
 }
 
-//
-const ACCESS_TTL = "15m"; //15 minutes → pour les requêtes aux API
-const REFRESH_TTL = "7d"; //7 jours → pour renouveler l’access token sans re-login.
+const ACCESS_TTL = "15m";
+const REFRESH_TTL = "7d";
+
+function expToDate(expSeconds) {
+  return new Date(expSeconds * 1000);
+}
+
+function newJti() {
+  return crypto.randomBytes(16).toString('hex');
+}
 
 //Fonctions de création de token 
 function signAccess(payload) {
-    return jwt.sign(payload, process.env.JWT_ACCESS_SECRET, {
+    return jwt.sign({ ...payload, jti: newJti() }, process.env.JWT_ACCESS_SECRET, {
         expiresIn: ACCESS_TTL,
     });
 }
 function signRefresh(payload) {
-    return jwt.sign(payload, process.env.JWT_REFRESH_SECRET, {
+    return jwt.sign({ ...payload, jti: newJti() }, process.env.JWT_REFRESH_SECRET, {
         expiresIn: REFRESH_TTL,
     });
 }
+
 function setRefreshCookie(res, token) {
     res.cookie("refresh_token", token, {
         httpOnly: true,
@@ -81,6 +94,20 @@ router.post("/signup", async (req, res, next) => {
         //on génère access token et refresh token
         const accessToken = signAccess({ sub: user.id, role: user.role || "user" });
         const refreshToken = signRefresh({ sub: user.id });
+        const rtPayload = jwt.decode(refreshToken);
+        try {
+          await prisma.refreshSession.create({
+            data: {
+              id: rtPayload.jti,
+              userId: user.id,
+              userAgent: req.get('user-agent') || null,
+              ip: req.ip || null,
+              expiresAt: expToDate(rtPayload.exp)
+            }
+          });
+        } catch (e) {
+          console.error('Failed to persist refresh session on signup:', e);
+        }
 
         setRefreshCookie(res, refreshToken);
         res.status(201).json({
@@ -121,6 +148,22 @@ router.post("/login", async (req, res, next) => {
         const accessToken = signAccess({ sub: user.id, role: user.role || "user" });
         const refreshToken = signRefresh({ sub: user.id });
 
+
+        const rtPayload = jwt.decode(refreshToken);
+        try {
+          await prisma.refreshSession.create({
+            data: {
+              id: rtPayload.jti,
+              userId: user.id,
+              userAgent: req.get('user-agent') || null,
+              ip: req.ip || null,
+              expiresAt: expToDate(rtPayload.exp)
+            }
+          });
+        } catch (e) {
+          console.error('Failed to persist refresh session on login:', e);
+        }
+
         //Met le refresh token dans le cookie
         setRefreshCookie(res, refreshToken);
         res.json({
@@ -142,27 +185,59 @@ router.post("/refresh", async (req, res) => {
     try {
         //Vérifie que le refresh token est valide (jwt.verify)
         const payload = jwt.verify(rt, process.env.JWT_REFRESH_SECRET);
-        const user = await prisma.user.findUnique({ where: { id: payload.sub } });
-        if (!user)
-            return res.status(401).json({ ok: false, message: "Invalid refresh" });
 
-        //Génère un nouveau access token et un nouveau refresh token.
-        const accessToken = signAccess({ sub: user.id, role: user.role || "user" });
-        const refreshToken = signRefresh({ sub: user.id });
-        //Met le refresh token dans le cookie.
-        setRefreshCookie(res, refreshToken);
-        res.json({ ok: true, accessToken });
+        const session = await prisma.refreshSession.findUnique({ where: { id: payload.jti } });
+        if (!session || session.userId !== payload.sub) {
+          return res.status(401).json({ ok: false, message: 'Invalid refresh' });
+        }
+        if (session.revokedAt || session.expiresAt < new Date()) {
+          return res.status(401).json({ ok: false, message: 'Refresh expired or revoked' });
+        }
+
+        const user = await prisma.user.findUnique({ where: { id: payload.sub } });
+        if (!user) return res.status(401).json({ ok: false, message: 'Invalid refresh' });
+
+        const accessToken = signAccess({ sub: user.id, role: user.role || 'user' });
+        const newRefreshToken = signRefresh({ sub: user.id });
+        const newRtPayload = jwt.decode(newRefreshToken);
+
+        await prisma.$transaction([
+          prisma.refreshSession.update({
+            where: { id: session.id },
+            data: { revokedAt: new Date(), replacedBy: newRtPayload.jti }
+          }),
+          prisma.refreshSession.create({
+            data: {
+              id: newRtPayload.jti,
+              userId: user.id,
+              userAgent: req.get('user-agent') || null,
+              ip: req.ip || null,
+              expiresAt: expToDate(newRtPayload.exp)
+            }
+          })
+        ]);
+
+        setRefreshCookie(res, newRefreshToken);
+        return res.json({ ok: true, accessToken });
     } catch (e) {
         res.status(401).json({ ok: false, message: "Invalid refresh" });
     }
 });
 
-// POST /api/auth/logout //déconnexion 
-//Supprime le refresh token dans le cookie 
-//  déconnecte l’utilisateur.
-router.post("/logout", (req, res) => {
-    res.clearCookie("refresh_token", { path: "/api/auth" });
-    res.status(204).end();
+// POST /api/auth/logout
+router.post('/logout', async (req, res) => {
+  const rt = req.cookies?.refresh_token;
+  if (rt) {
+    try {
+      const payload = jwt.verify(rt, process.env.JWT_REFRESH_SECRET);
+      await prisma.refreshSession.update({
+        where: { id: payload.jti },
+        data: { revokedAt: new Date() }
+      }).catch(() => {});
+    } catch (_) { }
+  }
+  res.clearCookie('refresh_token', { path: '/api/auth' });
+  res.status(204).end();
 });
 
 module.exports = router;

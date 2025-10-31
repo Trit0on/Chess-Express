@@ -23,13 +23,25 @@ function requireAuth(req, res, next) {
 router.use(requireAuth);
 
 router.get('/me', async (req, res) => {
-    const userId = req.user?.id;
-    if (!userId) return res.status(401).json({ ok: false, message: 'Unauthorized' });
+  const userId = req.user?.id;
+  if (!userId)
+    return res.status(401).json({ ok: false, message: 'Unauthorized' });
 
-    const user = await prisma.user.findUnique({ where: { id: userId } });
-    if (!user) return res.status(404).json({ ok: false, message: 'User not found' });
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: {
+      id: true,
+      email: true,
+      name: true,
+      createdAt: true,
+      updatedAt: true
+    }
+  });
 
-    res.json({ ok: true, user });
+  if (!user)
+    return res.status(404).json({ ok: false, message: 'User not found' });
+
+  res.json({ ok: true, user });
 });
 
 
@@ -43,9 +55,16 @@ router.get('/all', async (req, res) => {
 
 router.get('/:id', async (req, res) => {
   const userId = req.params.id;
+
   const user = await prisma.user.findUnique({
     where: { id: userId },
-
+    select: {
+      id: true,
+      email: true,
+      name: true,
+      createdAt: true,
+      updatedAt: true
+    }
   });
 
   if (!user)

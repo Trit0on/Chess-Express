@@ -33,13 +33,13 @@ npm install
 
 ---
 
-## 6) Prisma: initialiser la base
+## Prisma: initialiser la base
 
 Vérifie Prisma puis applique les migrations :
 
 ```bash
 npx prisma -v
-npx prisma migrate dev --name refactor_user
+npx prisma migrate dev --name add-refresh-session
 # interface de prisma
 npx prisma studio
 ```

@@ -96,14 +96,14 @@ export class HomeComponent implements OnInit {
     this.authService.currentUser$.subscribe(user => {
       this.currentUser = user;
       if (!user) {
-        this.router.navigate(['/signup']);
+        this.router.navigate(['/signin']);
       }
     });
   }
 
   logout(): void {
     this.authService.logout();
-    this.router.navigate(['/signup']);
+    this.router.navigate(['/signin']);
   }
 }
 

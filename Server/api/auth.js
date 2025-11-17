@@ -1,7 +1,8 @@
-const express = require("express");
-const { PrismaClient } = require("@prisma/client");
-const crypto = require("crypto"); //crypto : utilisé pour le hachage sécurisé des mots de passe.
-const jwt = require("jsonwebtoken"); //pour créer et vérifier les tokens JWT.
+import express from "express";
+import { PrismaClient } from "@prisma/client";
+import crypto from "crypto";
+import jwt from "jsonwebtoken";
+import { AuthResponseDto, RefreshResponseDto, ErrorResponseDto } from './dto/auth.dto.js';
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -9,6 +10,8 @@ const prisma = new PrismaClient();
 const ITERATIONS = 120000;
 const KEYLEN = 64;
 const DIGEST = "sha512";
+
+
 function hashPassword(plain) {
     const salt = crypto.randomBytes(16).toString("hex");
     const derived = crypto
@@ -16,6 +19,8 @@ function hashPassword(plain) {
         .toString("hex");
     return `pbkdf2-${DIGEST}$${ITERATIONS}$${salt}$${derived}`;
 }
+
+
 function verifyPassword(plain, stored) {
   const parts = stored.split('$');
   const isNewFormat = parts.length === 4;
@@ -62,41 +67,68 @@ function setRefreshCookie(res, token) {
         httpOnly: true,
         sameSite: "lax",
         secure: process.env.NODE_ENV === "production",
-        path: "/api/auth",
+        path: "/", 
         maxAge: 1000 * 60 * 60 * 24 * 7,
     });
 }
 
-// POST /api/auth/signup //inscription d'un nouvel utilisateur
-//vérifie que email et mdp fournis,
-
-//
 router.post("/signup", async (req, res, next) => {
+  /**
+   * @swagger
+   * /api/auth/signup:
+   *   post:
+   *     summary: Register a new user
+   *     tags: [Auth]
+   *     requestBody:
+   *       required: true
+   *       content:
+   *         application/json:
+   *           schema:
+   *             $ref: '#/components/schemas/SignupRequestDto'
+   *     responses:
+   *       201:
+   *         description: User created successfully
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/AuthResponseDto'
+   *       400:
+   *         description: Invalid data
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/ErrorResponseDto'
+   *       409:
+   *         description: Email already in use
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/ErrorResponseDto'
+   */
     try {
         const { email, password, name } = req.body || {};
         if (!email || !password)
             return res
                 .status(400)
-                .json({ ok: false, message: "email and password are required" });
+                .json(new ErrorResponseDto("email and password are required"));
 
-        //vérifie si l'utilisateur existe déjà (findUnique),
+
         const exists = await prisma.user.findUnique({ where: { email } });
         if (exists)
-            return res.status(409).json({ ok: false, message: "Email already used" });
+            return res.status(409).json(new ErrorResponseDto("Email already used"));
 
-    //Hache le mot de passe (hashPassword).
+
         const hashed = hashPassword(password);
-        //Crée l’utilisateur dans la DB (prisma.user.create).
+
         const user = await prisma.user.create({
             data: { email, password: hashed, name },
         });
 
-        //on génère access token et refresh token
         const accessToken = signAccess({ sub: user.id, role: user.role || "user" });
         const refreshToken = signRefresh({ sub: user.id });
         const rtPayload = jwt.decode(refreshToken);
         try {
-          await prisma.refreshSession.create({
+          await prisma.refreshSession.create({ 
             data: {
               id: rtPayload.jti,
               userId: user.id,
@@ -110,40 +142,67 @@ router.post("/signup", async (req, res, next) => {
         }
 
         setRefreshCookie(res, refreshToken);
-        res.status(201).json({
-            ok: true,
-            user: { id: user.id, email: user.email, name: user.name },
-            accessToken,
-        });
+        res.status(201).json(new AuthResponseDto(user, accessToken));
     } catch (e) {
         next(e);
     }
 });
 
-// POST /api/auth/login //connexion d'un utilisateur 
 router.post("/login", async (req, res, next) => {
+  /**
+   * @swagger
+   * /api/auth/login:
+   *   post:
+   *     summary: Login a user
+   *     tags: [Auth]
+   *     requestBody:
+   *       required: true
+   *       content:
+   *         application/json:
+   *           schema:
+   *             $ref: '#/components/schemas/LoginRequestDto'
+   *     responses:
+   *       200:
+   *         description: Login successful
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/AuthResponseDto'
+   *       400:
+   *         description: Invalid data
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/ErrorResponseDto'
+   *       401:
+   *         description: Invalid credentials
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/ErrorResponseDto'
+   */
     try {
-        //Vérifie les champs email/password
+
         const { email, password } = req.body || {};
         if (!email || !password)
             return res
                 .status(400)
-                .json({ ok: false, message: "email and password are required" });
+                .json(new ErrorResponseDto("email and password are required"));
 
-         //Récupère l’utilisateur dans la DB
+
         const user = await prisma.user.findUnique({ where: { email } });
         if (!user)
             return res
                 .status(401)
-                .json({ ok: false, message: "Invalid credentials" });
+                .json(new ErrorResponseDto("Invalid credentials"));
 
-                //Vérifie le mot de passe (verifyPassword)
+
         const ok = verifyPassword(password, user.password);
-        //Si ok, génère access + refresh token.
+
         if (!ok)
             return res
                 .status(401)
-                .json({ ok: false, message: "Invalid credentials" });
+                .json(new ErrorResponseDto("Invalid credentials"));
 
         const accessToken = signAccess({ sub: user.id, role: user.role || "user" });
         const refreshToken = signRefresh({ sub: user.id });
@@ -166,36 +225,51 @@ router.post("/login", async (req, res, next) => {
 
         //Met le refresh token dans le cookie
         setRefreshCookie(res, refreshToken);
-        res.json({
-            ok: true,
-            user: { id: user.id, email: user.email, name: user.name },
-            accessToken,
-        });
+        res.json(new AuthResponseDto(user, accessToken));
     } catch (e) {
         next(e);
     }
 });
 
-// POST /api/auth/refresh // renouvellement du token
 router.post("/refresh", async (req, res) => {
+  /**
+   * @swagger
+   * /api/auth/refresh:
+   *   post:
+   *     summary: Refresh access token
+   *     tags: [Auth]
+   *     responses:
+   *       200:
+   *         description: Token refreshed successfully
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/RefreshResponseDto'
+   *       401:
+   *         description: Invalid or expired refresh token
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/ErrorResponseDto'
+   */
     //Récupère le refresh token depuis le cookie
     const rt = req.cookies?.refresh_token;
     if (!rt)
-        return res.status(401).json({ ok: false, message: "No refresh token" });
+        return res.status(401).json(new ErrorResponseDto("No refresh token"));
     try {
         //Vérifie que le refresh token est valide (jwt.verify)
         const payload = jwt.verify(rt, process.env.JWT_REFRESH_SECRET);
 
         const session = await prisma.refreshSession.findUnique({ where: { id: payload.jti } });
         if (!session || session.userId !== payload.sub) {
-          return res.status(401).json({ ok: false, message: 'Invalid refresh' });
+          return res.status(401).json(new ErrorResponseDto('Invalid refresh'));
         }
         if (session.revokedAt || session.expiresAt < new Date()) {
-          return res.status(401).json({ ok: false, message: 'Refresh expired or revoked' });
+          return res.status(401).json(new ErrorResponseDto('Refresh expired or revoked'));
         }
 
         const user = await prisma.user.findUnique({ where: { id: payload.sub } });
-        if (!user) return res.status(401).json({ ok: false, message: 'Invalid refresh' });
+        if (!user) return res.status(401).json(new ErrorResponseDto('Invalid refresh'));
 
         const accessToken = signAccess({ sub: user.id, role: user.role || 'user' });
         const newRefreshToken = signRefresh({ sub: user.id });
@@ -218,14 +292,23 @@ router.post("/refresh", async (req, res) => {
         ]);
 
         setRefreshCookie(res, newRefreshToken);
-        return res.json({ ok: true, accessToken });
+        return res.json(new RefreshResponseDto(accessToken));
     } catch (e) {
-        res.status(401).json({ ok: false, message: "Invalid refresh" });
+        res.status(401).json(new ErrorResponseDto("Invalid refresh"));
     }
 });
 
-// POST /api/auth/logout
 router.post('/logout', async (req, res) => {
+  /**
+   * @swagger
+   * /api/auth/logout:
+   *   post:
+   *     summary: Logout user
+   *     tags: [Auth]
+   *     responses:
+   *       204:
+   *         description: Logout successful
+   */
   const rt = req.cookies?.refresh_token;
   if (rt) {
     try {
@@ -236,8 +319,14 @@ router.post('/logout', async (req, res) => {
       }).catch(() => {});
     } catch (_) { }
   }
-  res.clearCookie('refresh_token', { path: '/api/auth' });
+  // Clear cookie with the SAME options as when it was set
+  res.clearCookie('refresh_token', {
+    path: '/',
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: process.env.NODE_ENV === 'production'
+  });
   res.status(204).end();
 });
 
-module.exports = router;
+export default router;

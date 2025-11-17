@@ -69,11 +69,26 @@ export class AuthService {
     );
   }
 
-  logout(): void {
-    this.accessToken = null;
-    this.currentUserSubject.next(null);
-    localStorage.removeItem('accessToken');
-    localStorage.removeItem('currentUser');
+  logout(): Observable<any> {
+    return this.http.post(`${this.apiUrl}/logout`, {}, { withCredentials: true }).pipe(
+      tap(() => {
+        this.accessToken = null;
+        this.currentUserSubject.next(null);
+        localStorage.removeItem('accessToken');
+        localStorage.removeItem('currentUser');
+      })
+    );
+  }
+
+  refreshToken(): Observable<AuthResponse> {
+    return this.http.post<AuthResponse>(`${this.apiUrl}/refresh`, {}, { withCredentials: true }).pipe(
+      tap(response => {
+        if (response.ok && response.accessToken) {
+          this.accessToken = response.accessToken;
+          localStorage.setItem('accessToken', response.accessToken);
+        }
+      })
+    );
   }
 
   getAccessToken(): string | null {
